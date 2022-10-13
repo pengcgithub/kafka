@@ -543,7 +543,6 @@ public class NetworkClient implements KafkaClient {
             /**
              * 第一次更新，然后业务线程又把needUpdate设置成了true，其实这个metadataTimeout就是0 ，也就是立马更新元数据，首先是选取一个node
              */
-
             // should we update our metadata?
             // 计算当前时间距离下次更新metadata间隔时间
             long timeToNextMetadataUpdate = metadata.timeToNextUpdate(now);
