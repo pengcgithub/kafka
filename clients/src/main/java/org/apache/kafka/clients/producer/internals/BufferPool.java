@@ -43,11 +43,15 @@ import org.apache.kafka.common.utils.Time;
  */
 public final class BufferPool {
 
+    // 缓冲区的内存大小(32mb)
     private final long totalMemory;
+    // batch的大小
     private final int poolableSize;
     private final ReentrantLock lock;
+    // 缓存了一些内存空间
     private final Deque<ByteBuffer> free;
     private final Deque<Condition> waiters;
+    // 剩余的内存
     private long availableMemory;
     private final Metrics metrics;
     private final Time time;
@@ -91,6 +95,7 @@ public final class BufferPool {
      */
     public ByteBuffer allocate(int size, long maxTimeToBlockMs) throws InterruptedException {
         if (size > this.totalMemory)
+            // 如果分配的buffer的大小 大于 缓冲区的内存大小(32mb) 则抛出异常
             throw new IllegalArgumentException("Attempt to allocate " + size
                                                + " bytes, but there is a hard limit of "
                                                + this.totalMemory
@@ -100,15 +105,19 @@ public final class BufferPool {
         try {
             // check if we have a free buffer of the right size pooled
             if (size == poolableSize && !this.free.isEmpty())
+                // 如果有大小合适的空闲缓冲区，则直接使用缓冲区内的buffer
                 return this.free.pollFirst();
 
             // now check if the request is immediately satisfiable with the
             // memory on hand or if we need to block
+            // 当前缓存的内存空间 * batchSize = free缓存的大小
             int freeListSize = this.free.size() * this.poolableSize;
+            // （this.availableMemory（可用内存） + freeListSize）= 总的可用内存大小
             if (this.availableMemory + freeListSize >= size) {
                 // we have enough unallocated or pooled memory to immediately
                 // satisfy the request
                 freeUp(size);
+                // 可用内存减去消息的size
                 this.availableMemory -= size;
                 lock.unlock();
                 return ByteBuffer.allocate(size);
@@ -117,7 +126,9 @@ public final class BufferPool {
                 int accumulated = 0;
                 ByteBuffer buffer = null;
                 Condition moreMemory = this.lock.newCondition();
+                // 最大等待阻塞的时间
                 long remainingTimeToBlockNs = TimeUnit.MILLISECONDS.toNanos(maxTimeToBlockMs);
+                // 放入等待队列
                 this.waiters.addLast(moreMemory);
                 // loop over and over until we have a buffer or have reserved
                 // enough memory to allocate one

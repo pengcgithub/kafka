@@ -38,14 +38,39 @@ public final class Metadata {
     private static final Logger log = LoggerFactory.getLogger(Metadata.class);
 
     private final long refreshBackoffMs;
+
+    /**
+     * 元数据的失效时间，也就是需要更新元数据的时间间隔，默认5分钟
+     */
     private final long metadataExpireMs;
     private int version;
+
+    /**
+     * 最近一次尝试更新元数据的时间戳
+     */
     private long lastRefreshMs;
+
+    /**
+     * 最近一次成功更新元数据的时间戳
+     */
     private long lastSuccessfulRefreshMs;
+
+    /**
+     * 元数据数据结构
+     */
     private Cluster cluster;
     private boolean needUpdate;
+    /**
+     * 客户端缓存的topic
+     */
     private final Set<String> topics;
+    /**
+     * 缓存的监听器
+     */
     private final List<Listener> listeners;
+    /**
+     * 是否强制更新所有的metadata
+     */
     private boolean needMetadataForAllTopics;
 
     /**
@@ -117,6 +142,7 @@ public final class Metadata {
 
     /**
      * Wait for metadata update until the current version is larger than the last version we know of
+     * 就是将version传了进去，然后version不变的话就会一直循环，sender拉取到了元数据信息，然后更新本地的缓存的时候，会将这个version+1，这个时候，它就会逃离这个循环。
      */
     public synchronized void awaitUpdate(final int lastVersion, final long maxWaitMs) throws InterruptedException {
         if (maxWaitMs < 0) {
@@ -124,11 +150,14 @@ public final class Metadata {
         }
         long begin = System.currentTimeMillis();
         long remainingWaitMs = maxWaitMs;
+        // lastVersion小于当前version，出等待队列
         while (this.version <= lastVersion) {
             if (remainingWaitMs != 0)
+                // 阻塞等待sender线程更新元数据成功
                 wait(remainingWaitMs);
             long elapsed = System.currentTimeMillis() - begin;
             if (elapsed >= maxWaitMs)
+                // 超过最大等待的时间直接抛异常
                 throw new TimeoutException("Failed to update metadata after " + maxWaitMs + " ms.");
             remainingWaitMs = maxWaitMs - elapsed;
         }
@@ -185,7 +214,7 @@ public final class Metadata {
         // 更新metadata 维护的cluster对象，换成了响应回来的那个
         this.cluster = this.needMetadataForAllTopics ? getClusterForCurrentTopics(cluster) : cluster;
 
-        // 唤醒
+        // 唤醒等待的主线程
         notifyAll();
         log.debug("Updated cluster metadata version {} to {}", this.version, this.cluster);
     }

@@ -456,11 +456,13 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
         try {
             // first make sure the metadata for the topic is available
             /**
-             * 同步阻塞等待获取topic元数据
-             * maxBlockTimeMs = max.block.ms
+             * 1、同步阻塞等待获取topic元数据
+             * 通过 waitOnMetadata()方法更新 Kafka 集群的信息，其底层实际上是通过唤醒 Sender 线程来更新 Metadata，Metadata 中保存的是 Kafka 集群元数据。
+             * maxBlockTimeMs = max.block.ms = 最大阻塞时间
              */
             long waitedOnMetadataMs = waitOnMetadata(record.topic(), this.maxBlockTimeMs);
             long remainingWaitMs = Math.max(0, this.maxBlockTimeMs - waitedOnMetadataMs);
+            /** 2、执行 Serializer.serialize()方法完成 message key 和 value 的序列化。 */
             byte[] serializedKey;
             try {
                 serializedKey = keySerializer.serialize(record.topic(), record.key());
@@ -477,13 +479,11 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                         " to class " + producerConfig.getClass(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG).getName() +
                         " specified in value.serializer");
             }
-            /**
-             * 基于获取到的topic元数据，使用partitioner组件获取消息对应的分区
-             */
+            /** 3、基于获取到的topic元数据，使用partitioner组件获取消息对应的分区 */
             int partition = partition(record, serializedKey, serializedValue, metadata.fetch());
             // 计算消息的大小 Record.recordSize(serializedKey, serializedValue)
             int serializedSize = Records.LOG_OVERHEAD + Record.recordSize(serializedKey, serializedValue);
-            // 检查消息的大小，如果超过则抛出异常
+            // 检查消息的大小（默认1mb），如果超过则抛出异常
             ensureValidRecordSize(serializedSize);
             tp = new TopicPartition(record.topic(), partition);
             long timestamp = record.timestamp() == null ? time.milliseconds() : record.timestamp();
@@ -491,10 +491,9 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             // producer callback will make sure to call both 'callback' and interceptor callback
             // 回调函数
             Callback interceptCallback = this.interceptors == null ? callback : new InterceptorCallback<>(callback, this.interceptors, tp);
-            /**
-             * 6、将消息加入到内存缓冲中(核心)
-             */
+            /** 4、将消息加入到内存缓冲（RecordAccumulator）中(核心) */
             RecordAccumulator.RecordAppendResult result = accumulator.append(tp, timestamp, serializedKey, serializedValue, interceptCallback, remainingWaitMs);
+            /** 5、唤醒 Sender 线程，后续就由 Sender 线程从 RecordAccumulator 中批量发送 message 到 kafka 集群 */
             if (result.batchIsFull || result.newBatchCreated) {
                 log.trace("Waking up the sender since topic {} partition {} is either full or getting a new batch", record.topic(), partition);
                 this.sender.wakeup();
@@ -542,7 +541,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      * @return The amount of time we waited in ms
      */
     private long waitOnMetadata(String topic, long maxWaitMs) throws InterruptedException {
-        // add topic to metadata topic list if it is not there already.
+        // 如果topic在metadata中不存在，则将topic添加到metadata中
         if (!this.metadata.containsTopic(topic))
             this.metadata.add(topic);
 
@@ -551,11 +550,13 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
 
         long begin = time.milliseconds();
         long remainingWaitMs = maxWaitMs;
-        // 如果
         while (metadata.fetch().partitionsForTopic(topic) == null) {
             log.trace("Requesting metadata update for topic {}.", topic);
+            // 将needUpdate设置为true，然后唤醒sender线程执行元数据的拉取操作。
             int version = metadata.requestUpdate();
+            // 唤醒Sender线程，由Sender线程去完成元数据的更新
             sender.wakeup();
+            // 阻塞等待元数据更新，停止阻塞的条件是，更新后的updateVersion大于当前version，超时的话会直接抛出异常
             metadata.awaitUpdate(version, remainingWaitMs);
             long elapsed = time.milliseconds() - begin;
             if (elapsed >= maxWaitMs)
@@ -743,6 +744,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
     private int partition(ProducerRecord<K, V> record, byte[] serializedKey , byte[] serializedValue, Cluster cluster) {
         Integer partition = record.partition();
         if (partition != null) {
+            // 指定具体的partition的情况
             List<PartitionInfo> partitions = cluster.partitionsForTopic(record.topic());
             int lastPartition = partitions.size() - 1;
             // they have given us a partition, use it
@@ -751,6 +753,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             }
             return partition;
         }
+        // 没有指定partition的情况
         return this.partitioner.partition(record.topic(), record.key(), serializedKey, record.value(), serializedValue,
             cluster);
     }

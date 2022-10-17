@@ -172,9 +172,11 @@ public class Sender implements Runnable {
     void run(long now) {
         Cluster cluster = metadata.fetch();
         // get the list of partitions with data ready to send
+        // 1、检查哪些数据需要发送
         RecordAccumulator.ReadyCheckResult result = this.accumulator.ready(cluster, now);
 
         // if there are any partitions whose leaders are not known yet, force metadata update
+        // 2、
         if (result.unknownLeadersExist)
             this.metadata.requestUpdate();
 
@@ -183,6 +185,7 @@ public class Sender implements Runnable {
         long notReadyTimeout = Long.MAX_VALUE;
         while (iter.hasNext()) {
             Node node = iter.next();
+            // 3、检查下是否准备好可以向哪些broker发送数据了，如果还没跟某个broker建立好连接，必须在这里把长连接准备好；
             if (!this.client.ready(node, now)) {
                 iter.remove();
                 notReadyTimeout = Math.min(notReadyTimeout, this.client.connectionDelay(node, now));
@@ -190,6 +193,8 @@ public class Sender implements Runnable {
         }
 
         // create produce requests
+        // 4、有很多Partition可以发送数据，有一些Partition Leader是在同一个Broker上，
+        // 此时按照Broker对Partition进行分组，找到一个Broker对应的多个Partition的Batch
         Map<Integer, List<RecordBatch>> batches = this.accumulator.drain(cluster,
                                                                          result.readyNodes,
                                                                          this.maxRequestSize,

@@ -42,6 +42,7 @@ public class MemoryRecords implements Records {
     private ByteBuffer buffer;
 
     // indicate if the memory records is writable or not (i.e. used for appends or read-only)
+    // 初始化大小为batchSize
     private boolean writable;
 
     // Construct a writable memory records
@@ -94,6 +95,7 @@ public class MemoryRecords implements Records {
         if (!writable)
             throw new IllegalStateException("Memory records is not writable");
 
+        // compressor 完全可以按照一条消息的格式去写数据
         int size = Record.recordSize(key, value);
         compressor.putLong(offset);
         compressor.putInt(size);
@@ -120,6 +122,8 @@ public class MemoryRecords implements Records {
 
         return this.compressor.numRecordsWritten() == 0 ?
             this.initialCapacity >= Records.LOG_OVERHEAD + Record.recordSize(key, value) :
+                // this.compressor.estimatedBytesWritten() = 已经写入batch的大小
+                // 已经写入batch的大小 + 一条消息size <= writeLimit(batchSize = 16kb)，则返回true
             this.writeLimit >= this.compressor.estimatedBytesWritten() + Records.LOG_OVERHEAD + Record.recordSize(key, value);
     }
 

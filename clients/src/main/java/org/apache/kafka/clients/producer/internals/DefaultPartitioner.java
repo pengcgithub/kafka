@@ -68,11 +68,15 @@ public class DefaultPartitioner implements Partitioner {
     public int partition(String topic, Object key, byte[] keyBytes, Object value, byte[] valueBytes, Cluster cluster) {
         List<PartitionInfo> partitions = cluster.partitionsForTopic(topic);
         int numPartitions = partitions.size();
+        // 判断是否指定分区key
         if (keyBytes == null) {
+            // 递增数字，正整数
             int nextValue = counter.getAndIncrement();
+            // 获取当前topic可用的分区
             List<PartitionInfo> availablePartitions = cluster.availablePartitionsForTopic(topic);
             if (availablePartitions.size() > 0) {
-                // 取模 availablePartitions = topic对应的partition信息
+                // availablePartitions = topic对应的有效的partition
+                // 递增的正整数和topic的分区取模，保证不指定分区key的情况下，消息可以均匀的发送到不同的分区上。
                 int part = DefaultPartitioner.toPositive(nextValue) % availablePartitions.size();
                 return availablePartitions.get(part).partition();
             } else {
@@ -81,6 +85,7 @@ public class DefaultPartitioner implements Partitioner {
             }
         } else {
             // hash the keyBytes to choose a partition
+            // Utils.murmur2(keyBytes) 分区key会通过murmur2算法转化成一个int类型的hash值
             return DefaultPartitioner.toPositive(Utils.murmur2(keyBytes)) % numPartitions;
         }
     }

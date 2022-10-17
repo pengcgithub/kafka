@@ -65,9 +65,11 @@ public final class RecordBatch {
      */
     public FutureRecordMetadata tryAppend(long timestamp, byte[] key, byte[] value, Callback callback, long now) {
         if (!this.records.hasRoomFor(key, value)) {
+            // 如果已经没有空间容纳消息
             return null;
         } else {
             long checksum = this.records.append(offsetCounter++, timestamp, key, value);
+            // 保留batch中最大的一条消息的大小
             this.maxRecordSize = Math.max(this.maxRecordSize, Record.recordSize(key, value));
             this.lastAppendTime = now;
             FutureRecordMetadata future = new FutureRecordMetadata(this.produceFuture, this.recordCount,

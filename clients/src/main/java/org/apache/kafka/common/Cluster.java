@@ -30,6 +30,9 @@ import java.util.Set;
  */
 public final class Cluster {
 
+    /**
+     * 标识当前元数据信息是producer初始化的配置信息还是启动之后的
+     */
     private final boolean isBootstrapConfigured;
 
     /**

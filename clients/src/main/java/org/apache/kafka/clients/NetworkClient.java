@@ -239,8 +239,11 @@ public class NetworkClient implements KafkaClient {
     }
 
     private void doSend(ClientRequest request, long now) {
+        // 设置发送的时间
         request.setSendTimeMs(now);
+        // 标记正在发送中
         this.inFlightRequests.add(request);
+        // 使用selector进行发送
         selector.send(request.request());
     }
 
@@ -255,9 +258,10 @@ public class NetworkClient implements KafkaClient {
      */
     @Override
     public List<ClientResponse> poll(long timeout, long now) {
-        // 就是在检查拉取元数据
+        // 1、封装一个拉取元数据的请求
         long metadataTimeout = metadataUpdater.maybeUpdate(now);
         try {
+            // 2、发送请求进行复杂的网络操作
             this.selector.poll(Utils.min(timeout, metadataTimeout, requestTimeoutMs));
         } catch (IOException e) {
             log.error("Unexpected error during I/O", e);
@@ -266,15 +270,18 @@ public class NetworkClient implements KafkaClient {
         // process completed actions
         long updatedNow = this.time.milliseconds();
         List<ClientResponse> responses = new ArrayList<>();
-        // 处理完成发送的
+        // 处理发送完成的请求
         handleCompletedSends(responses, updatedNow);
-        // 处理完成接收的
+        // 3、处理响应，响应中有我们需要的元数据
         handleCompletedReceives(responses, updatedNow);
         handleDisconnections(responses, updatedNow);
+        // 建立好连接后，把连接状态改为connected
         handleConnections();
+        // 处理已经超时的请求
         handleTimedOutRequests(responses, updatedNow);
 
         // invoke callbacks
+        // 4、解析出来response，和请求一一匹配，一个request对应一个response，然后调用回调函数
         for (ClientResponse response : responses) {
             if (response.request().hasCallback()) {
                 try {
@@ -450,6 +457,7 @@ public class NetworkClient implements KafkaClient {
             String source = receive.source();
             ClientRequest req = inFlightRequests.completeNext(source);
             Struct body = parseResponse(receive.payload(), req.request().header());
+            // 判断是否是元数据拉取的请求，如果是则更新metadata并返回true，否则返回false
             if (!metadataUpdater.maybeHandleCompletedReceive(req, now, body))
                 responses.add(new ClientResponse(req, now, false, body));
         }
@@ -606,7 +614,9 @@ public class NetworkClient implements KafkaClient {
             this.metadata.requestUpdate();
         }
 
-        // 处理响应
+        /**
+         * 处理响应
+         */
         private void handleResponse(RequestHeader header, Struct body, long now) {
             // 这里会先metadataFetchInProgress 重置为false，表示没有正在更新元数据的请求。
             this.metadataFetchInProgress = false;
@@ -651,17 +661,23 @@ public class NetworkClient implements KafkaClient {
             }
             String nodeConnectionId = node.idString();
 
+            // 判断网络连接是否建立好
             if (canSendRequest(nodeConnectionId)) {
                 this.metadataFetchInProgress = true;
                 MetadataRequest metadataRequest;
                 if (metadata.needMetadataForAllTopics())
+                    // 封装获取所有topic的元数据信息的请求
+                    // 一般获取元数据的时候仅获取自己要发送消息对应topic的元数据信息，一般不走这个分支
                     metadataRequest = MetadataRequest.allTopics();
                 else
+                    // 默认走这个分支，拉取发送消息对应的topic信息
                     metadataRequest = new MetadataRequest(new ArrayList<>(metadata.topics()));
+                // 创建拉取元数据的request请求
                 ClientRequest clientRequest = request(now, nodeConnectionId, metadataRequest);
                 log.debug("Sending metadata request {} to node {}", metadataRequest, node.id());
+                // 构建拉取元数据的请求，然后通过send发送出去
                 doSend(clientRequest, now);
-            } else if (connectionStates.canConnect(nodeConnectionId, now)) {
+            } else if (connectionStates.canConnect(nodeConnectionId, now)) { // 如果不能发送请求，就先进行连接
                 // we don't have a connection to this node right now, make one
                 log.debug("Initialize connection to node {} for sending metadata request", node.id());
                 initiateConnect(node, now);
