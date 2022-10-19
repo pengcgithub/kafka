@@ -69,7 +69,7 @@ public final class RecordAccumulator {
     private final long retryBackoffMs;
     private final BufferPool free;
     private final Time time;
-    // 缓冲区的数据结构
+    // 内存缓冲区的数据结构
     private final ConcurrentMap<TopicPartition, Deque<RecordBatch>> batches;
     private final IncompleteRecordBatches incomplete;
     // The following variables are only accessed by the sender thread, so we don't need to protect them.
@@ -185,6 +185,7 @@ public final class RecordAccumulator {
             int size = Math.max(this.batchSize, Records.LOG_OVERHEAD + Record.recordSize(key, value));
             log.trace("Allocating a new {} byte message buffer for topic {} partition {}", size, tp.topic(), tp.partition());
             // 分配一个byteBuffer
+            // 多线程情况下，可能会存在多个线程都拿到创建的的byteBuffer
             ByteBuffer buffer = free.allocate(size, maxTimeToBlock);
             synchronized (dq) {
                 // Need to check if producer is closed again after grabbing the dequeue lock.
@@ -217,11 +218,12 @@ public final class RecordAccumulator {
      * resources (like compression streams buffers).
      */
     private RecordAppendResult tryAppend(long timestamp, byte[] key, byte[] value, Callback callback, Deque<RecordBatch> deque) {
-        RecordBatch last = deque.peekLast(); // 返回deuqe中最后一个元素
+        // 返回deque中最后一个元素
+        RecordBatch last = deque.peekLast();
         if (last != null) {
             FutureRecordMetadata future = last.tryAppend(timestamp, key, value, callback, time.milliseconds());
             if (future == null)
-                // 关闭io流等操作
+                // 关闭io流，设置不可写入
                 last.records.close();
             else
                 return new RecordAppendResult(future, deque.size() > 1 || last.records.isFull(), false);
@@ -311,26 +313,28 @@ public final class RecordAccumulator {
         long nextReadyCheckDelayMs = Long.MAX_VALUE;
         boolean unknownLeadersExist = false;
 
-        boolean exhausted = this.free.queued() > 0;
+        boolean exhausted = this.free.queued() > 0; // 内存耗尽，排队等待内存释放
         for (Map.Entry<TopicPartition, Deque<RecordBatch>> entry : this.batches.entrySet()) {
             TopicPartition part = entry.getKey();
             Deque<RecordBatch> deque = entry.getValue();
 
             Node leader = cluster.leaderFor(part);
             if (leader == null) {
+                // partition没有找到leader broker
                 unknownLeadersExist = true;
             } else if (!readyNodes.contains(leader) && !muted.contains(part)) {
                 synchronized (deque) {
                     RecordBatch batch = deque.peekFirst();
                     if (batch != null) {
-                        boolean backingOff = batch.attempts > 0 && batch.lastAttemptMs + retryBackoffMs > nowMs;
-                        long waitedTimeMs = nowMs - batch.lastAttemptMs;
-                        long timeToWaitMs = backingOff ? retryBackoffMs : lingerMs;
+                        boolean backingOff = batch.attempts > 0 && batch.lastAttemptMs + retryBackoffMs > nowMs; // 是否重试状态
+                        long waitedTimeMs = nowMs - batch.lastAttemptMs; // 当前时间 - 上一次发送的时间
+                        long timeToWaitMs = backingOff ? retryBackoffMs : lingerMs; // 这个batch从创建开始算起，最多等待多久就必须发送出去
                         long timeLeftMs = Math.max(timeToWaitMs - waitedTimeMs, 0);
-                        boolean full = deque.size() > 1 || batch.records.isFull();
+                        boolean full = deque.size() > 1 || batch.records.isFull(); // batch是否已满
                         boolean expired = waitedTimeMs >= timeToWaitMs;
                         boolean sendable = full || expired || exhausted || closed || flushInProgress();
                         if (sendable && !backingOff) {
+                            // 经过一系列判断，确定可以发送消息
                             readyNodes.add(leader);
                         } else {
                             // Note that this results in a conservative estimate since an un-sendable partition may have

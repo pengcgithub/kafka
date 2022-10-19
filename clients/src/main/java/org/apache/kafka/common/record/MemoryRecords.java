@@ -95,7 +95,7 @@ public class MemoryRecords implements Records {
         if (!writable)
             throw new IllegalStateException("Memory records is not writable");
 
-        // compressor 完全可以按照一条消息的格式去写数据
+        // compressor 完全按照一条消息的格式去写数据
         int size = Record.recordSize(key, value);
         compressor.putLong(offset);
         compressor.putInt(size);
@@ -144,6 +144,7 @@ public class MemoryRecords implements Records {
             buffer.flip();
 
             // reset the writable flag
+            // 设置为不可写
             writable = false;
         }
     }

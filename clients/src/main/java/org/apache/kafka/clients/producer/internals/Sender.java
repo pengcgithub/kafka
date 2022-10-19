@@ -176,7 +176,7 @@ public class Sender implements Runnable {
         RecordAccumulator.ReadyCheckResult result = this.accumulator.ready(cluster, now);
 
         // if there are any partitions whose leaders are not known yet, force metadata update
-        // 2、
+        // 2、如果partition对应的元数据没有拉去到，这边需要标记下，后面去尝试拉取元数据
         if (result.unknownLeadersExist)
             this.metadata.requestUpdate();
 

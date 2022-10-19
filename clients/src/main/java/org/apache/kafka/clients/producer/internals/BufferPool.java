@@ -43,15 +43,15 @@ import org.apache.kafka.common.utils.Time;
  */
 public final class BufferPool {
 
-    // 缓冲区的内存大小(32mb)
+    /** 缓冲区的内存大小(32mb) */
     private final long totalMemory;
-    // batch的大小
+    /** batch的大小 */
     private final int poolableSize;
     private final ReentrantLock lock;
-    // 缓存了一些内存空间
+    /** 缓存了一些内存空间 */
     private final Deque<ByteBuffer> free;
     private final Deque<Condition> waiters;
-    // 剩余的内存
+    /** 剩余的内存 = totalMemory - （free.size * batchSize） - 已经使用的内存 */
     private long availableMemory;
     private final Metrics metrics;
     private final Time time;
@@ -121,33 +121,38 @@ public final class BufferPool {
                 this.availableMemory -= size;
                 lock.unlock();
                 return ByteBuffer.allocate(size);
-            } else {
+            } else { // 没有内存空间，阻塞
                 // we are out of memory and will have to block
                 int accumulated = 0;
                 ByteBuffer buffer = null;
                 Condition moreMemory = this.lock.newCondition();
                 // 最大等待阻塞的时间
                 long remainingTimeToBlockNs = TimeUnit.MILLISECONDS.toNanos(maxTimeToBlockMs);
-                // 放入等待队列
+                // 加入到等待队列
                 this.waiters.addLast(moreMemory);
                 // loop over and over until we have a buffer or have reserved
                 // enough memory to allocate one
+                /** 循环阻塞 */
                 while (accumulated < size) {
                     long startWaitNs = time.nanoseconds();
                     long timeNs;
                     boolean waitingTimeElapsed;
                     try {
+                        // 阻塞
                         waitingTimeElapsed = !moreMemory.await(remainingTimeToBlockNs, TimeUnit.NANOSECONDS);
                     } catch (InterruptedException e) {
+                        // 异常，移除此线程对应的 Condition
                         this.waiters.remove(moreMemory);
                         throw e;
                     } finally {
+                        // 统计阻塞的时间
                         long endWaitNs = time.nanoseconds();
                         timeNs = Math.max(0L, endWaitNs - startWaitNs);
                         this.waitTime.record(timeNs, time.milliseconds());
                     }
 
                     if (waitingTimeElapsed) {
+                        // 超时 报错
                         this.waiters.remove(moreMemory);
                         throw new TimeoutException("Failed to allocate memory within the configured max blocking time " + maxTimeToBlockMs + " ms.");
                     }
@@ -156,27 +161,32 @@ public final class BufferPool {
                     // check if we can satisfy this request from the free list,
                     // otherwise allocate memory
                     if (accumulated == 0 && size == this.poolableSize && !this.free.isEmpty()) {
+                        /** 如果消息的大小和batchSize相等，并且free中有空闲的byteBuffer */
                         // just grab a buffer from the free list
                         buffer = this.free.pollFirst();
                         accumulated = size;
                     } else {
                         // we'll need to allocate memory, but we may only get
                         // part of what we need on this iteration
+                        /** 先分配一部分空间，并继续等待空闲内存空间 */
                         freeUp(size - accumulated);
                         int got = (int) Math.min(size - accumulated, this.availableMemory);
                         this.availableMemory -= got;
+                        /** accumulated最终于消息的size进行比较，如果大于等于size，则退出循环等待 */
                         accumulated += got;
                     }
                 }
 
                 // remove the condition for this thread to let the next thread
                 // in line start getting memory
+                /** 已经成功分配空间，移除condition */
                 Condition removed = this.waiters.removeFirst();
                 if (removed != moreMemory)
                     throw new IllegalStateException("Wrong condition: this shouldn't happen.");
 
                 // signal any additional waiters if there is more memory left
                 // over for them
+                /** 如果还有空闲空间，就唤醒下一个线程 */
                 if (this.availableMemory > 0 || !this.free.isEmpty()) {
                     if (!this.waiters.isEmpty())
                         this.waiters.peekFirst().signal();
@@ -198,6 +208,7 @@ public final class BufferPool {
     /**
      * Attempt to ensure we have at least the requested number of bytes of memory for allocation by deallocating pooled
      * buffers (if needed)
+     * 如果availableMemory内存小于消息内存，并且free缓存中有可用的buffer，那么就释放掉free缓存中的buffer，然后将内存都还原给availableMemory
      */
     private void freeUp(int size) {
         while (!this.free.isEmpty() && this.availableMemory < size)

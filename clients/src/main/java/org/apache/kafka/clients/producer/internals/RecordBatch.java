@@ -33,18 +33,28 @@ public final class RecordBatch {
 
     private static final Logger log = LoggerFactory.getLogger(RecordBatch.class);
 
+    /** 记录了保存的 Record 的个数 */
     public int recordCount = 0;
+    /** 最大 Record 的字节数 */
     public int maxRecordSize = 0;
+    /** 尝试发送当前 RecordBatch 的次数 */
     public volatile int attempts = 0;
     public final long createdMs;
     public long drainedMs;
+    /** 最后一次尝试发送的时间戳 */
     public long lastAttemptMs;
+    /** 指向用来存储数据的 MemoryRecords 对象 */
     public final MemoryRecords records;
+    /** 当前 RecordBatch 中缓存的消息都会发送给此 TopicPartition */
     public final TopicPartition topicPartition;
+    /** 标识 RecordBatch 状态的 Future 对象 */
     public final ProduceRequestResult produceFuture;
+    /** 最后一次向 RecordBatch 追加消息的时间戳 */
     public long lastAppendTime;
     private final List<Thunk> thunks;
+    /** 用来记录某消息在 RecordBatch 中的偏移量 */
     private long offsetCounter = 0L;
+    /** 是否正在重试。如果 RecordBatch 中的数据发送失败，则会重新尝试发送 */
     private boolean retry;
 
     public RecordBatch(TopicPartition tp, MemoryRecords records, long now) {
@@ -64,13 +74,14 @@ public final class RecordBatch {
      * @return The RecordSend corresponding to this record or null if there isn't sufficient room.
      */
     public FutureRecordMetadata tryAppend(long timestamp, byte[] key, byte[] value, Callback callback, long now) {
+        // 判断当前batch是否有空间容纳消息
         if (!this.records.hasRoomFor(key, value)) {
-            // 如果已经没有空间容纳消息
             return null;
         } else {
             long checksum = this.records.append(offsetCounter++, timestamp, key, value);
             // 保留batch中最大的一条消息的大小
             this.maxRecordSize = Math.max(this.maxRecordSize, Record.recordSize(key, value));
+            // 记录最后一次追加的时间
             this.lastAppendTime = now;
             FutureRecordMetadata future = new FutureRecordMetadata(this.produceFuture, this.recordCount,
                                                                    timestamp, checksum,
