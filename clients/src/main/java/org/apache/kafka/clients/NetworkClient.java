@@ -221,6 +221,9 @@ public class NetworkClient implements KafkaClient {
      * @param node The node
      */
     private boolean canSendRequest(String node) {
+        // 1、是否已经建立了连接
+        // 2、
+        // 3、可设置的参数，默认对同一个broker同一时间最多容忍5个请求发送过去但是还没有收到响应。如果发送五个请求没有响应，那么就不可以继续发送了。
         return connectionStates.isConnected(node) && selector.isChannelReady(node) && inFlightRequests.canSendMore(node);
     }
 
@@ -505,7 +508,9 @@ public class NetworkClient implements KafkaClient {
         String nodeConnectionId = node.idString();
         try {
             log.debug("Initiating connection to node {} at {}:{}.", node.id(), node.host(), node.port());
+            // 更新状态
             this.connectionStates.connecting(nodeConnectionId, now);
+            // 通过selector发起连接
             selector.connect(nodeConnectionId,
                              new InetSocketAddress(node.host(), node.port()),
                              this.socketSendBuffer,
@@ -543,6 +548,8 @@ public class NetworkClient implements KafkaClient {
 
         @Override
         public boolean isUpdateDue(long now) {
+            // 前不能处于元数据加载的过程 && 下一次要更新元数据的间隔时间为0，现在没有加载元数据，但是马上就应该要加载元数据了
+            // 如果对上述条件判断是非的话，要不然是正在加载元数据，或者是还没到加载元数据的时候
             return !this.metadataFetchInProgress && this.metadata.timeToNextUpdate(now) == 0;
         }
 

@@ -326,11 +326,28 @@ public final class RecordAccumulator {
                 synchronized (deque) {
                     RecordBatch batch = deque.peekFirst();
                     if (batch != null) {
-                        boolean backingOff = batch.attempts > 0 && batch.lastAttemptMs + retryBackoffMs > nowMs; // 是否重试状态
-                        long waitedTimeMs = nowMs - batch.lastAttemptMs; // 当前时间 - 上一次发送的时间
-                        long timeToWaitMs = backingOff ? retryBackoffMs : lingerMs; // 这个batch从创建开始算起，最多等待多久就必须发送出去
+                        // 是否重试状态
+                        boolean backingOff = batch.attempts > 0 && batch.lastAttemptMs + retryBackoffMs > nowMs;
+                        // 当前时间 - 上一次发送batch的时间，
+                        // 假设一个Batch从来没有发送过，此时当前时间减去这个Batch被创建出来的那个时间，
+                        // waitedTimeMs则表示这个Batch从创建开始到现在已经等待了多久了
+                        long waitedTimeMs = nowMs - batch.lastAttemptMs;
+                        /**
+                         * 这个batch从创建开始算起，最多等待多久就必须发送出去
+                         * backingOff如果是重试阶段，则是重试间隔，否则就是用户设置的linger.ms（batch最多等待发送的时间间隔）时间，默认是0
+                         */
+                        long timeToWaitMs = backingOff ? retryBackoffMs : lingerMs;
                         long timeLeftMs = Math.max(timeToWaitMs - waitedTimeMs, 0);
-                        boolean full = deque.size() > 1 || batch.records.isFull(); // batch是否已满
+                        /**
+                         * 判断batch是否已满
+                         * 1、如果说Dequeue里超过一个Batch了，说明这个peekFirst返回的Batch就一定是已经满的，
+                         * 2、另外就是如果假设Dequeue里只有一个Batch，但是判断发现这个Batch达到了16kb的大小，也是已满的
+                         */
+                        boolean full = deque.size() > 1 || batch.records.isFull();
+                        /**
+                         * batch发送是否超时
+                         * 当前Batch已经等待的时间（120ms） >= Batch最多只能等待的时间（100ms）
+                         */
                         boolean expired = waitedTimeMs >= timeToWaitMs;
                         boolean sendable = full || expired || exhausted || closed || flushInProgress();
                         if (sendable && !backingOff) {
@@ -340,6 +357,13 @@ public final class RecordAccumulator {
                             // Note that this results in a conservative estimate since an un-sendable partition may have
                             // a leader that will later be found to have sendable data. However, this is good enough
                             // since we'll just wake up and then sleep again for the remaining time.
+                            /**
+                             * 如果没有一个Partition的first Batch可以发送，此时会利用这个Batch来计算一下nextReadyCheckDelayMs，
+                             * 假设此时有6个Partition的first Batch都不可以发送，会综合利用这个6个Partition的
+                             * firstBatch的timeToLeft（linger.ms - 已经等待的时间），取一个最小值，就代表说最快可以发送的那个batch的等待时间
+                             *
+                             * nextReadyCheckDelayMs这个时间会用作下次操作该方法起码需要等待这么长时间
+                             */
                             nextReadyCheckDelayMs = Math.min(timeLeftMs, nextReadyCheckDelayMs);
                         }
                     }
