@@ -41,7 +41,7 @@ final class ClusterConnectionStates {
             // 之前从来没有建立过连接
             return true;
         else
-            // 连接状态已经存在，断开连接 && 上次连接的时间到现在已经超过了重试的时间
+            // 连接状态已经存在，断开连接 && 上次尝试建立连接的时间到现在已经超过了重试的时间（默认100ms）
             return state.state == ConnectionState.DISCONNECTED && now - state.lastConnectAttemptMs >= this.reconnectBackoffMs;
     }
 

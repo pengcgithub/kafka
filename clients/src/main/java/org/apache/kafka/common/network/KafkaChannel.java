@@ -28,8 +28,13 @@ import java.security.Principal;
 
 import org.apache.kafka.common.utils.Utils;
 
+/**
+ * 封装底层nio socket channel
+ */
 public class KafkaChannel {
+    // broker id
     private final String id;
+    // 封装底层的socketChannel
     private final TransportLayer transportLayer;
     private final Authenticator authenticator;
     private final int maxReceiveSize;

@@ -129,9 +129,13 @@ public class NetworkClient implements KafkaClient {
         }
         this.selector = selector;
         this.clientId = clientId;
+        // 每隔连接最多有几个request没有收到响应（默认5个）
         this.inFlightRequests = new InFlightRequests(maxInFlightRequestsPerConnection);
+        // 存储连接的状态
         this.connectionStates = new ClusterConnectionStates(reconnectBackoffMs);
+        // socket发送缓冲区大小(128kb)
         this.socketSendBuffer = socketSendBuffer;
+        // socket接收缓冲区大小(32kb)
         this.socketReceiveBuffer = socketReceiveBuffer;
         this.correlation = 0;
         this.randOffset = new Random();
@@ -212,6 +216,7 @@ public class NetworkClient implements KafkaClient {
     public boolean isReady(Node node, long now) {
         // if we need to update our metadata now declare all requests unready to make metadata requests first
         // priority
+        // 是否准备好消息发送的条件
         return !metadataUpdater.isUpdateDue(now) && canSendRequest(node.idString());
     }
 
@@ -221,9 +226,9 @@ public class NetworkClient implements KafkaClient {
      * @param node The node
      */
     private boolean canSendRequest(String node) {
-        // 1、是否已经建立了连接
-        // 2、
-        // 3、可设置的参数，默认对同一个broker同一时间最多容忍5个请求发送过去但是还没有收到响应。如果发送五个请求没有响应，那么就不可以继续发送了。
+        // 1、有一个broker的缓存，判断是否已经建立了连接
+        // 2、底层封装的就是java nio的selector，看selector是否注册channel，每隔channel都代表一个broker建立的连接
+        // 3、可设置的参数，默认对同一个broker同一时间最多容忍5个请求发送过去但是还没有收到响应。如果发送5个请求没有响应，那么就不可以继续发送了。
         return connectionStates.isConnected(node) && selector.isChannelReady(node) && inFlightRequests.canSendMore(node);
     }
 
@@ -548,7 +553,7 @@ public class NetworkClient implements KafkaClient {
 
         @Override
         public boolean isUpdateDue(long now) {
-            // 前不能处于元数据加载的过程 && 下一次要更新元数据的间隔时间为0，现在没有加载元数据，但是马上就应该要加载元数据了
+            // 当前不能处于元数据加载的过程 && 下一次要更新元数据的间隔时间为0（现在没有加载元数据，但是马上就应该要加载元数据了）
             // 如果对上述条件判断是非的话，要不然是正在加载元数据，或者是还没到加载元数据的时候
             return !this.metadataFetchInProgress && this.metadata.timeToNextUpdate(now) == 0;
         }

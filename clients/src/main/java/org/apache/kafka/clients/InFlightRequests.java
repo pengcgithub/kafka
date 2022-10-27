@@ -22,10 +22,14 @@ import java.util.Map;
 
 /**
  * The set of requests which have been sent or are being sent but haven't yet received a response
+ *
+ * InFlightRequests队列的作用是缓存已经发出去但没有收到响应的ClientRequest
  */
 final class InFlightRequests {
 
+    /** 每个连接最大执行中请求数 */
     private final int maxInFlightRequestsPerConnection;
+    /** 节点node至客户端请求双端队列Deque<ClientRequest>的映射集合,key为节点地址，Value为已发送但未响应的请求队列 */
     private final Map<String, Deque<ClientRequest>> requests = new HashMap<String, Deque<ClientRequest>>();
 
     public InFlightRequests(int maxInFlightRequestsPerConnection) {

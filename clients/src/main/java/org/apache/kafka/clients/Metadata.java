@@ -37,6 +37,9 @@ public final class Metadata {
 
     private static final Logger log = LoggerFactory.getLogger(Metadata.class);
 
+    /**
+     * 两次发出更新 Cluster 保存的元数据信息的最小时间差，默认为 100ms。防止更新操作过于频繁而造成网络阻塞和增加服务端压力。
+     */
     private final long refreshBackoffMs;
 
     /**

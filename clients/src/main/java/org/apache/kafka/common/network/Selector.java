@@ -110,18 +110,27 @@ public class Selector implements Selectable {
         } catch (IOException e) {
             throw new KafkaException(e);
         }
+        // 最大能接收请求的大小
         this.maxReceiveSize = maxReceiveSize;
+        // 连接最多能空闲的时间的大小（需要回收掉）
         this.connectionsMaxIdleNanos = connectionMaxIdleMs * 1000 * 1000;
         this.time = time;
+        // 统计相关的
         this.metricGrpPrefix = metricGrpPrefix;
         this.metricTags = metricTags;
+        // 每个broker到channel之间的映射关系
         this.channels = new HashMap<>();
+        // 已经发送出去的请求
         this.completedSends = new ArrayList<>();
+        // 已经接收回来的响应，已经被处理完了
         this.completedReceives = new ArrayList<>();
+        // 每个broker收到的但是还没有被处理的响应
         this.stagedReceives = new HashMap<>();
         this.immediatelyConnectedKeys = new HashSet<>();
+        // 已经成功建立连接的brokers
         this.connected = new ArrayList<>();
         this.disconnected = new ArrayList<>();
+        // 发送失败的brokers
         this.failedSends = new ArrayList<>();
         this.sensors = new SelectorMetrics(metrics);
         this.channelBuilder = channelBuilder;
@@ -155,16 +164,25 @@ public class Selector implements Selectable {
             throw new IllegalStateException("There is already a connection for id " + id);
 
         SocketChannel socketChannel = SocketChannel.open();
+        // 阻塞模式
         socketChannel.configureBlocking(false);
         Socket socket = socketChannel.socket();
+        // 如果开启，则会每隔一段时间发送探测包，检测是否存活，如果任意一方已经断开连接，则需要将socket资源关闭
         socket.setKeepAlive(true);
         if (sendBufferSize != Selectable.USE_DEFAULT_BUFFER_SIZE)
             socket.setSendBufferSize(sendBufferSize);
         if (receiveBufferSize != Selectable.USE_DEFAULT_BUFFER_SIZE)
             socket.setReceiveBufferSize(receiveBufferSize);
+        //
         socket.setTcpNoDelay(true);
         boolean connected;
         try {
+            /**
+             * 语意：
+             * 如果这个SocketChannel是被设置为非阻塞模式的话，那么对这个connect方法的调用，会初始化一个非阻塞的连接请求，如果这个发起的连接立马就成功了，比如说客户端跟要连接的服务端都在一台机器上
+             * 此时就会出现一个立马就连接成功的情况，然后就会返回一个true
+             * 否则只要不是那种立马可以连接成功的情况，就会返回一个false，接着就需要在后面去调用SocketChannel的finishConnect方法，去完成最终的连接
+             */
             connected = socketChannel.connect(address);
         } catch (UnresolvedAddressException e) {
             socketChannel.close();
@@ -173,6 +191,7 @@ public class Selector implements Selectable {
             socketChannel.close();
             throw e;
         }
+        // socket channel注册到nio selector上，同时监听OP_CONNECT事件
         SelectionKey key = socketChannel.register(nioSelector, SelectionKey.OP_CONNECT);
         KafkaChannel channel = channelBuilder.buildChannel(id, key, maxReceiveSize);
         key.attach(channel);
@@ -181,6 +200,7 @@ public class Selector implements Selectable {
         if (connected) {
             // OP_CONNECT won't trigger for immediately connected channels
             log.debug("Immediately connected to node {}", channel.id());
+            // 立即连接好的缓存集合
             immediatelyConnectedKeys.add(key);
             key.interestOps(0);
         }
@@ -300,7 +320,7 @@ public class Selector implements Selectable {
 
             // register all per-connection metrics at once
             sensors.maybeRegisterConnectionMetrics(channel.id());
-            lruConnections.put(channel.id(), currentTimeNanos);
+            lruConnections.put(channel.id(), currentTimeNanos); // lru算法
 
             try {
 
@@ -314,6 +334,7 @@ public class Selector implements Selectable {
                 }
 
                 /* if channel is not ready finish prepare */
+                // 建立好连接 && 没有准备好授权
                 if (channel.isConnected() && !channel.ready())
                     channel.prepare();
 
@@ -451,6 +472,10 @@ public class Selector implements Selectable {
         if (ms == 0L)
             return this.nioSelector.selectNow();
         else
+        /**
+         * 他会负责去看看，注册到他这里的多个Channel，谁有响应过来可以接收，或者谁现在可以执行一个请求的发送，
+         * 如果Channel可以准备执行IO读写操作，此时就把那个Channel的SelectionKey返回
+         */
             return this.nioSelector.select(ms);
     }
 
