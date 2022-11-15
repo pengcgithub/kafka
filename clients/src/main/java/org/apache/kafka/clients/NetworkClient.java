@@ -372,10 +372,12 @@ public class NetworkClient implements KafkaClient {
         int inflight = Integer.MAX_VALUE;
         Node found = null;
 
+        // 生成 0 - node size 之间有效的整数
         int offset = this.randOffset.nextInt(nodes.size());
         for (int i = 0; i < nodes.size(); i++) {
             int idx = (offset + i) % nodes.size();
             Node node = nodes.get(idx);
+            // 获取一个broker，并且这个broker没有等待的响应请求
             int currInflight = this.inFlightRequests.inFlightRequestCount(node.idString());
             if (currInflight == 0 && this.connectionStates.isConnected(node.idString())) {
                 // if we find an established connection with no in-flight requests we can stop right away
@@ -567,7 +569,7 @@ public class NetworkClient implements KafkaClient {
             // 计算当前时间距离下次更新metadata间隔时间
             long timeToNextMetadataUpdate = metadata.timeToNextUpdate(now);
 
-            // 计算下次重连的时间
+            // 计算下次重试的时间
             long timeToNextReconnectAttempt = Math.max(this.lastNoNodeAvailableMs + metadata.refreshBackoff() - now, 0);
             // 判断现在是不是有在拉取元数据的请求，如果有的话则int最大值
             long waitForMetadataFetch = this.metadataFetchInProgress ? Integer.MAX_VALUE : 0;

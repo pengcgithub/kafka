@@ -30,19 +30,22 @@ public class MemoryRecords implements Records {
     private final static int WRITE_LIMIT_FOR_READABLE_ONLY = -1;
 
     // the compressor used for appends-only
+    // 压缩器，对消息数据进行压缩，将压缩后的数据输出到 buffer
     private final Compressor compressor;
 
     // the write limit for writable buffer, which may be smaller than the buffer capacity
+    // 记录 buffer 字段最多可以写入多少个字节的数据
     private final int writeLimit;
 
     // the capacity of the initial buffer, which is only used for de-allocation of writable records
     private final int initialCapacity;
 
     // the underlying buffer used for read; while the records are still writable it is null
+    // 用于保存消息数据的 Java NIO ByteBuffer
     private ByteBuffer buffer;
 
     // indicate if the memory records is writable or not (i.e. used for appends or read-only)
-    // 初始化大小为batchSize
+    // 标记当前MemoryRecords对象是否可写入。在消息发送前，会将其设置成只读模式。
     private boolean writable;
 
     // Construct a writable memory records
@@ -74,6 +77,7 @@ public class MemoryRecords implements Records {
 
     /**
      * Append the given record and offset to the buffer
+     * 先判断 MomoryRecords 是否为可写模式，然后调用 Compressor.put*() 方法，将消息数据写入 ByteBuffer 中。
      */
     public void append(long offset, Record record) {
         if (!writable)
@@ -115,6 +119,9 @@ public class MemoryRecords implements Records {
      * capacity will be the message size which is larger than the write limit, i.e. the batch size. In this case
      * the checking should be based on the capacity of the initialized buffer rather than the write limit in order
      * to accept this single record.
+     *
+     * 根据 Compressor 估计的已写字节数，估计 MemoryRecords 剩余空间是否足够写入指定的数据。
+     * 注意，这里仅仅是估计，所以不一定准确，通过 hasRoomFor() 方法判断之后写入数据，也可能就会导致底层 ByteBuffer 出现扩容的情况。
      */
     public boolean hasRoomFor(byte[] key, byte[] value) {
         if (!this.writable)
@@ -133,6 +140,8 @@ public class MemoryRecords implements Records {
 
     /**
      * Close this batch for no more appends
+     * 出现 ByteBuffer 扩容的情况时，MemoryRecords.buffer 字段与 ByteBufferOutputStream.buffer 字段所指向的不再是同一个 ByteBuffer 对象。
+     * 在 close() 方法中，会将 MemoryRecords.buffer 字段指向扩容后的 ByteBuffer 对象。同时，将 writbale 设置为 false （即只读模式）
      */
     public void close() {
         if (writable) {

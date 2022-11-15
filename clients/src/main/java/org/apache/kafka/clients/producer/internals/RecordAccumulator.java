@@ -67,10 +67,12 @@ public final class RecordAccumulator {
     private final CompressionType compression;
     private final long lingerMs;
     private final long retryBackoffMs;
+    // 内存管理机制，实现对byteBuffer的管理和复用
     private final BufferPool free;
     private final Time time;
     // 内存缓冲区的数据结构
     private final ConcurrentMap<TopicPartition, Deque<RecordBatch>> batches;
+    // 未发送完成 RecordBatch 集合，底层通过 Set<RecordBatch> 实现
     private final IncompleteRecordBatches incomplete;
     // The following variables are only accessed by the sender thread, so we don't need to protect them.
     private final Set<TopicPartition> muted;
@@ -170,9 +172,19 @@ public final class RecordAccumulator {
         try {
             // check if we have an in-progress batch
             Deque<RecordBatch> dq = getOrCreateDeque(tp);
+            /** 第一步：假设我们有三个线程，线程一、线程二、线程三
+             * 线程一和线程二属于同一个分区
+             * 线程三属于其他分区
+             */
             synchronized (dq) {
+                /** 由于线程一、线程二属于同一个分区，所以会依次进入synchronized中 */
                 if (closed)
                     throw new IllegalStateException("Cannot send after the producer is closed.");
+                /**
+                 * 第二步：尝试往队列里面的批次添加数据
+                 * 一开始添加数据肯定是失败的，目前队列是没有批次对象的，数据是需要存储在批次对象里面（这个批次对象是需要分配内存的）。
+                 * 我们目前还没有分配内存，所以如果按场景驱动的方式，代码第一次运行到这儿其实是不成功的。
+                 */
                 // 第一次往topic中发送消息时，batch肯定是空的，所以appendResult会返回null
                 RecordAppendResult appendResult = tryAppend(timestamp, key, value, callback, dq);
                 if (appendResult != null)
@@ -180,30 +192,65 @@ public final class RecordAccumulator {
             }
 
             // we don't have an in-progress record batch try to allocate a new batch
+            /**
+             * 第三步：计算一个批次的大小
+             * 在消息的大小和批次的大小之间取一个最大值，用这个值作为当前这个批次的大小。
+             * 有可能我们的一个消息的大小比一个设定好的批次的大小还要大。（默认一个批次的大小是16K）
+             *
+             * 所以我们看到这段代码以后，应该给我们一个启示。
+             * 如果我们生产者发送数的时候，如果我们的消息的大小都是超过16K，说明其实就是一条消息就是一个批次，那也就是说消息是一条一条被发送出去的。
+             * 那如果是这样的话，批次这个概念的设计就没有意义了，所以大家一定要根据自定公司的数据大小的情况去设置批次的大小。
+             */
             // batchSize默认16kb，用户可以自己设置。
             // 如果你的消息小于batchSize，那么就会基于batchSize来分配内存空间。否则就会使用你的消息的大小来分配一块内存空间。
             int size = Math.max(this.batchSize, Records.LOG_OVERHEAD + Record.recordSize(key, value));
             log.trace("Allocating a new {} byte message buffer for topic {} partition {}", size, tp.topic(), tp.partition());
-            // 分配一个byteBuffer
+
+            /**
+             * 第四步：分配一个byteBuffer
+             * 线程一、线程二、线程三，执行到这儿都会申请内存。
+             * 假设每个线程 都申请了 16k的内存
+             */
             // 多线程情况下，可能会存在多个线程都拿到创建的的byteBuffer
             ByteBuffer buffer = free.allocate(size, maxTimeToBlock);
             synchronized (dq) {
+                /** 假设线程一、线程二 进来了 */
                 // Need to check if producer is closed again after grabbing the dequeue lock.
                 if (closed)
                     throw new IllegalStateException("Cannot send after the producer is closed.");
 
+                /**
+                 * 第五步：尝试把数据写入到批次里面
+                 * 线程一首次执行到这儿的时候依然还是失败的（appendResult==null），目前虽然已经分配了内存，
+                 * 但是还没有创建批次，那我们想往批次里面写数据还是不能写的。
+                 *
+                 * 线程二进来执行这段代码是成功的，因为线程一已经创建了批次
+                 */
                 // double check，防止多线程并发的情况
                 RecordAppendResult appendResult = tryAppend(timestamp, key, value, callback, dq);
                 if (appendResult != null) {
                     // Somebody else found us a batch, return the one we waited for! Hopefully this doesn't happen often...
+                    /**
+                     * 线程二执行tryAppend已经把数据写到批次了，所以他的内存就没有用了，需要在这里释放掉，把内存还给bufferPool
+                     */
                     // 释放buffer
                     free.deallocate(buffer);
                     return appendResult;
                 }
+
+                /**
+                 * 第六步：根据内存大小封装批次
+                 * 线程一执行到这步，会根据内存封装一个批次
+                 */
                 MemoryRecords records = MemoryRecords.emptyRecords(buffer, compression, this.batchSize);
                 RecordBatch batch = new RecordBatch(tp, records, time.milliseconds());
+                /** 线程一 尝试往刚刚创建的批次中写数据，完毕则表示写操作完成 */
                 FutureRecordMetadata future = Utils.notNull(batch.tryAppend(timestamp, key, value, callback, time.milliseconds()));
 
+                /**
+                 * 第七步：将批次放到队列的队尾
+                 * 线程一把批次添加到队尾部
+                 */
                 dq.addLast(batch);
                 incomplete.add(batch);
                 return new RecordAppendResult(future, dq.size() > 1 || batch.records.isFull(), true);
@@ -321,12 +368,17 @@ public final class RecordAccumulator {
             Node leader = cluster.leaderFor(part);
             if (leader == null) {
                 // partition没有找到leader broker
+                // 后面尝试元数据的拉取
                 unknownLeadersExist = true;
             } else if (!readyNodes.contains(leader) && !muted.contains(part)) {
                 synchronized (deque) {
-                    RecordBatch batch = deque.peekFirst();
+                    RecordBatch batch = deque.peekFirst(); // 队列头部元素
                     if (batch != null) {
-                        // 是否重试状态
+                        /**
+                         * 是否处于重试状态
+                         * lastAttemptMs 上次重试的时间
+                         * retryBackoffMs 重试间隔
+                         */
                         boolean backingOff = batch.attempts > 0 && batch.lastAttemptMs + retryBackoffMs > nowMs;
                         // 当前时间 - 上一次发送batch的时间，
                         // 假设一个Batch从来没有发送过，此时当前时间减去这个Batch被创建出来的那个时间，

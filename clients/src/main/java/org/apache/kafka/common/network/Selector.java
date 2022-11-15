@@ -129,8 +129,9 @@ public class Selector implements Selectable {
         this.immediatelyConnectedKeys = new HashSet<>();
         // 已经成功建立连接的brokers
         this.connected = new ArrayList<>();
+        // 未成功建立连接的brokers
         this.disconnected = new ArrayList<>();
-        // 发送失败的brokers
+        // 发送请求失败的brokers
         this.failedSends = new ArrayList<>();
         this.sensors = new SelectorMetrics(metrics);
         this.channelBuilder = channelBuilder;
@@ -173,14 +174,14 @@ public class Selector implements Selectable {
             socket.setSendBufferSize(sendBufferSize);
         if (receiveBufferSize != Selectable.USE_DEFAULT_BUFFER_SIZE)
             socket.setReceiveBufferSize(receiveBufferSize);
-        //
+        // 如果设置为false，就会开启nagle算法，就会把网络中的小数据包给收集起来，组装成一个打包然后一次性发送出去
         socket.setTcpNoDelay(true);
         boolean connected;
         try {
             /**
              * 语意：
-             * 如果这个SocketChannel是被设置为非阻塞模式的话，那么对这个connect方法的调用，会初始化一个非阻塞的连接请求，如果这个发起的连接立马就成功了，比如说客户端跟要连接的服务端都在一台机器上
-             * 此时就会出现一个立马就连接成功的情况，然后就会返回一个true
+             * 如果这个SocketChannel是被设置为非阻塞模式的话，那么对这个connect方法的调用，会初始化一个非阻塞的连接请求，
+             * 如果这个发起的连接立马就成功了，比如说客户端跟要连接的服务端都在一台机器上，此时就会出现一个立马就连接成功的情况，然后就会返回一个true
              * 否则只要不是那种立马可以连接成功的情况，就会返回一个false，接着就需要在后面去调用SocketChannel的finishConnect方法，去完成最终的连接
              */
             connected = socketChannel.connect(address);

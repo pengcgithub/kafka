@@ -62,6 +62,9 @@ public final class Metadata {
      * 元数据数据结构
      */
     private Cluster cluster;
+    /**
+     * 是否需要更新元数据
+     */
     private boolean needUpdate;
     /**
      * 客户端缓存的topic

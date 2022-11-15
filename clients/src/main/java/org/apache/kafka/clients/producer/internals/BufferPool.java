@@ -43,13 +43,15 @@ import org.apache.kafka.common.utils.Time;
  */
 public final class BufferPool {
 
-    /** 缓冲区的内存大小(32mb) */
+    /** 缓冲区的内存大小(默认32mb) */
     private final long totalMemory;
     /** batch的大小 */
     private final int poolableSize;
+    /** 因为有多线程并发分配和回收 ByteBuffer，所以使用锁控制并发，保证线程安全 */
     private final ReentrantLock lock;
-    /** 缓存了一些内存空间 */
+    /** 缓存了指定大小的 ByteBuffer 对象 */
     private final Deque<ByteBuffer> free;
+    /** 记录因申请不到足够空间而阻塞的线程，此队列中实际记录的是阻塞线程对应的 Condition 对象 */
     private final Deque<Condition> waiters;
     /** 剩余的内存 = totalMemory - （free.size * batchSize） - 已经使用的内存 */
     private long availableMemory;
@@ -226,12 +228,15 @@ public final class BufferPool {
     public void deallocate(ByteBuffer buffer, int size) {
         lock.lock();
         try {
+            // 释放的ByteBuffer的大小是poolableSize，放入free队列进行管理
             if (size == this.poolableSize && size == buffer.capacity()) {
                 buffer.clear();
                 this.free.add(buffer);
             } else {
+                // 释放的ByteBuffer，仅修改 availableMemory 的值
                 this.availableMemory += size;
             }
+            // 唤醒一个因空间不足而阻塞的线程
             Condition moreMem = this.waiters.peekFirst();
             if (moreMem != null)
                 moreMem.signal();

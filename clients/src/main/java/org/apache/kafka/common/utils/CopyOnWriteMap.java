@@ -21,6 +21,14 @@ import java.util.concurrent.ConcurrentMap;
 
 /**
  * A simple read-optimized map implementation that synchronizes only writes and does a full copy on each modification
+ *
+ * 优点：
+ * 1.采用读写分离的思想，读操作性能很高，几乎无需额外开销，十分适用于读多写少的场景；
+ * 2.map采用volatile关键字修饰，保证了写操作对map的修改对其它线程可见；
+ * 缺点：
+ * 每次写操作都要内存复制一份，数据量大时对内存开销较大，容易导致频繁GC；
+ * 无法保证数据的强一致性，毕竟读写是作用于新老对象；
+ *
  */
 public class CopyOnWriteMap<K, V> implements ConcurrentMap<K, V> {
 
