@@ -64,6 +64,7 @@ public class NetworkReceive implements Receive {
 
     @Override
     public boolean complete() {
+        // 如果size和buffer都没有剩余空间（已经读取到值），说明标记内容大小的int值和内容都已经读取完了
         return !size.hasRemaining() && !buffer.hasRemaining();
     }
 
@@ -77,30 +78,37 @@ public class NetworkReceive implements Receive {
     @Deprecated
     public long readFromReadableChannel(ReadableByteChannel channel) throws IOException {
         int read = 0;
+        //size是一个4字节大小的内存空间，是一个int类型的值，保存了后面的响应体所占用的字节大小
+
+        //如果size还有剩余内存空间
         if (size.hasRemaining()) {
             int bytesRead = channel.read(size);
             if (bytesRead < 0)
                 throw new EOFException();
             read += bytesRead;
+
+            // 一直读取到size没有剩余空间，说明已经读取到一个4字节的int类型的数据
             if (!size.hasRemaining()) {
                 size.rewind();
-                int receiveSize = size.getInt();
+                int receiveSize = size.getInt(); // 消息体的字节数
                 if (receiveSize < 0)
                     throw new InvalidReceiveException("Invalid receive (size = " + receiveSize + ")");
                 if (maxSize != UNLIMITED && receiveSize > maxSize)
                     throw new InvalidReceiveException("Invalid receive (size = " + receiveSize + " larger than " + maxSize + ")");
 
+                // 分配一个内存空间，这个空间的大小就是刚刚读取出来的4字节int值的大小
                 this.buffer = ByteBuffer.allocate(receiveSize);
             }
         }
         if (buffer != null) {
+            // 读取指定字节的数据
             int bytesRead = channel.read(buffer);
             if (bytesRead < 0)
                 throw new EOFException();
             read += bytesRead;
         }
 
-        return read;
+        return read; // 统计读到的字节的总数（消息长度+消息内容）
     }
 
     public ByteBuffer payload() {

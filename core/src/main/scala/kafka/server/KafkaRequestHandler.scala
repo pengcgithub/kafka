@@ -26,6 +26,11 @@ import org.apache.kafka.common.utils.Utils
 
 /**
  * A thread that answers kafka requests.
+ * id: I/O线程序号
+ * brokerId：所在Broker序号，即broker.id值
+ * totalHandlerThreads：io线程池的大小
+ * RequestChannel：请求处理通道
+ * apis：KafkaApis类，用于真正实现请求处理逻辑的类
  */
 class KafkaRequestHandler(id: Int,
                           brokerId: Int,
@@ -45,8 +50,11 @@ class KafkaRequestHandler(id: Int,
           // time_window is independent of the number of threads, each recorded idle
           // time should be discounted by # threads.
           val startSelectTime = SystemTime.nanoseconds
+          // 从请求队列中获取下一个待处理的请求
           req = requestChannel.receiveRequest(300)
+          // 统计线程空闲事件
           val idleTime = SystemTime.nanoseconds - startSelectTime
+          // 更新线程空闲百分比指标
           aggregateIdleMeter.mark(idleTime / totalHandlerThreads)
         }
 
@@ -55,8 +63,10 @@ class KafkaRequestHandler(id: Int,
             id, brokerId))
           return
         }
+        // 更新请求被移除队列的时间戳
         req.requestDequeueTimeMs = SystemTime.milliseconds
         trace("Kafka request handler %d on broker %d handling request %s".format(id, brokerId, req))
+        // 处理响应请求的逻辑
         apis.handle(req)
       } catch {
         case e: Throwable => error("Exception when handling request", e)
@@ -67,6 +77,14 @@ class KafkaRequestHandler(id: Int,
   def shutdown(): Unit = requestChannel.sendRequest(RequestChannel.AllDone)
 }
 
+/**
+ * 工作线程池
+ * @param brokerId broker序号
+ * @param requestChannel SocketServer 的请求处理通道，它下辖的请求队列为所有 I/O 线程所共享。requestChannel 字段也是 KafkaRequestHandler 类的一个重要属性。
+ * @param apis KafkaApis 实例，执行实际的请求处理逻辑。它同时也是 KafkaRequestHandler 类的一个重要属性。
+ * @param numThreads 线程池中的初始线程数量。它是 Broker 端参数 num.io.threads 的值。
+ *                   目前，Kafka 支持动态修改 I/O 线程池的大小，因此，这里的 numThreads 是初始线程数，调整后的 I/O 线程池的实际大小可以和 numThreads 不一致。
+ */
 class KafkaRequestHandlerPool(val brokerId: Int,
                               val requestChannel: RequestChannel,
                               val apis: KafkaApis,
@@ -78,6 +96,7 @@ class KafkaRequestHandlerPool(val brokerId: Int,
   this.logIdent = "[Kafka Request Handler on Broker " + brokerId + "], "
   val threads = new Array[Thread](numThreads)
   val runnables = new Array[KafkaRequestHandler](numThreads)
+  // 初始化默认启动八个KafkaRequestHandler的线程
   for(i <- 0 until numThreads) {
     runnables(i) = new KafkaRequestHandler(i, brokerId, aggregateIdleMeter, numThreads, requestChannel, apis)
     threads(i) = Utils.daemonThread("kafka-request-handler-" + i, runnables(i))

@@ -304,8 +304,8 @@ public final class RecordAccumulator {
                         if (batch.maybeExpire(requestTimeout, retryBackoffMs, now, this.lingerMs, isFull)) {
                             expiredBatches.add(batch);
                             count++;
-                            batchIterator.remove();
-                            deallocate(batch);
+                            batchIterator.remove(); // 从队列中移除
+                            deallocate(batch); // 释放掉batch的资源
                         } else {
                             // Stop at the first batch that has not expired.
                             break;
@@ -330,6 +330,7 @@ public final class RecordAccumulator {
         batch.setRetry();
         Deque<RecordBatch> deque = getOrCreateDeque(batch.topicPartition);
         synchronized (deque) {
+            // 重试的队列直接放到队列头部
             deque.addFirst(batch);
         }
     }
@@ -481,6 +482,7 @@ public final class RecordAccumulator {
                                         // there is a rare case that a single batch size is larger than the request size due
                                         // to compression; in this case we will still eventually send this batch in a single
                                         // request
+                                        // 发送的数据已经超过最大的大小
                                         break;
                                     } else {
                                         RecordBatch batch = deque.pollFirst();

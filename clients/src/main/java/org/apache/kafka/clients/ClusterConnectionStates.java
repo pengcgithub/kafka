@@ -17,10 +17,13 @@ import java.util.Map;
 
 /**
  * The state of our connection to each node in the cluster.
- * 
+ * cluster连接的状态
  */
 final class ClusterConnectionStates {
     private final long reconnectBackoffMs;
+    /**
+     * broker -> broker的连接状态
+     */
     private final Map<String, NodeConnectionState> nodeState;
 
     public ClusterConnectionStates(long reconnectBackoffMs) {

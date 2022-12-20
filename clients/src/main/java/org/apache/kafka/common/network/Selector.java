@@ -82,9 +82,11 @@ public class Selector implements Selectable {
     private final java.nio.channels.Selector nioSelector;
     private final Map<String, KafkaChannel> channels;
     private final List<Send> completedSends;
+    // 已经完成的响应消息
     private final List<NetworkReceive> completedReceives;
     private final Map<KafkaChannel, Deque<NetworkReceive>> stagedReceives;
     private final Set<SelectionKey> immediatelyConnectedKeys;
+    // 断开连接的请求
     private final List<String> disconnected;
     private final List<String> connected;
     private final List<String> failedSends;
@@ -165,7 +167,7 @@ public class Selector implements Selectable {
             throw new IllegalStateException("There is already a connection for id " + id);
 
         SocketChannel socketChannel = SocketChannel.open();
-        // 阻塞模式
+        // 阻塞模式，设置非阻塞模式
         socketChannel.configureBlocking(false);
         Socket socket = socketChannel.socket();
         // 如果开启，则会每隔一段时间发送探测包，检测是否存活，如果任意一方已经断开连接，则需要将socket资源关闭
@@ -251,6 +253,7 @@ public class Selector implements Selectable {
     public void send(Send send) {
         KafkaChannel channel = channelOrFail(send.destination());
         try {
+            // 暂存KafkaChannel里面
             channel.setSend(send);
         } catch (CancelledKeyException e) {
             this.failedSends.add(send.destination());
@@ -295,6 +298,7 @@ public class Selector implements Selectable {
 
         /* check ready keys */
         long startSelect = time.nanoseconds();
+        // 获取是否有就绪的事件，有就返回就绪消息的数量，没有则为零
         int readyKeys = select(timeout);
         long endSelect = time.nanoseconds();
         currentTimeNanos = endSelect;
@@ -305,6 +309,7 @@ public class Selector implements Selectable {
             pollSelectionKeys(immediatelyConnectedKeys, true);
         }
 
+        // 将读取成功的响应消息加入到completedReceives集合
         addToCompletedReceives();
 
         long endIo = time.nanoseconds();
@@ -313,10 +318,12 @@ public class Selector implements Selectable {
     }
 
     private void pollSelectionKeys(Iterable<SelectionKey> selectionKeys, boolean isImmediatelyConnected) {
+        // 对获取的selectionKeys进行处理
         Iterator<SelectionKey> iterator = selectionKeys.iterator();
         while (iterator.hasNext()) {
             SelectionKey key = iterator.next();
             iterator.remove();
+            // 能获取到channel，说明这边的kafkaChannel有事情可以做
             KafkaChannel channel = channel(key);
 
             // register all per-connection metrics at once
@@ -326,7 +333,9 @@ public class Selector implements Selectable {
             try {
 
                 /* complete any connections that have finished their handshake (either normally or immediately) */
+                // 判断发现SelectionKey当前处于的状态是可以建立连接，接着就是调用kafkaChannel最底层的socketChannel方法，等待这个连接必须执行完毕。
                 if (isImmediatelyConnected || key.isConnectable()) {
+                    // 真正建立连接，调用底层socketChannel.finishConnect方法
                     if (channel.finishConnect()) {
                         this.connected.add(channel.id());
                         this.sensors.connectionCreated.record();
@@ -335,18 +344,22 @@ public class Selector implements Selectable {
                 }
 
                 /* if channel is not ready finish prepare */
-                // 建立好连接 && 没有准备好授权
+                // 如果已经建立好连接 && 没有准备好授权
                 if (channel.isConnected() && !channel.ready())
                     channel.prepare();
 
                 /* if channel is ready read from any connections that have readable data */
+                // 处理op_read事件的响应
+                // 如果stagedReceives不为空，是不能读取数据的
                 if (channel.ready() && key.isReadable() && !hasStagedReceive(channel)) {
                     NetworkReceive networkReceive;
                     while ((networkReceive = channel.read()) != null)
+                        // 一个byteBuffer读取结束，将读取到的消息加入到stagedReceives队列中
                         addToStagedReceives(channel, networkReceive);
                 }
 
                 /* if channel is ready write to any sockets that have space in their buffer and for which we have data */
+                // 判断可以发送数据，那就执行发送消息
                 if (channel.ready() && key.isWritable()) {
                     Send send = channel.write();
                     if (send != null) {
@@ -367,6 +380,7 @@ public class Selector implements Selectable {
                     log.debug("Connection with {} disconnected", desc, e);
                 else
                     log.warn("Unexpected error from {}; closing connection", desc, e);
+                // 客户端连接异常的情况，需要关闭channel以及将channel id加入到disconnected集合中
                 close(channel);
                 this.disconnected.add(channel.id());
             }
@@ -471,11 +485,14 @@ public class Selector implements Selectable {
             throw new IllegalArgumentException("timeout should be >= 0");
 
         if (ms == 0L)
+            // 获取是否有就绪的事件，该方法立即返回结果，不会阻塞。
             return this.nioSelector.selectNow();
         else
         /**
          * 他会负责去看看，注册到他这里的多个Channel，谁有响应过来可以接收，或者谁现在可以执行一个请求的发送，
          * 如果Channel可以准备执行IO读写操作，此时就把那个Channel的SelectionKey返回
+         *
+         * 在超时时间内，有就绪事件时才会返回，其次超过时间也会返回。
          */
             return this.nioSelector.select(ms);
     }
@@ -575,6 +592,7 @@ public class Selector implements Selectable {
 
     /**
      * checks if there are any staged receives and adds to completedReceives
+     * 会保证同一时间，只有一个客户端的一个请求会被放到completedReceives集合里面
      */
     private void addToCompletedReceives() {
         if (!this.stagedReceives.isEmpty()) {
@@ -584,7 +602,7 @@ public class Selector implements Selectable {
                 KafkaChannel channel = entry.getKey();
                 if (!channel.isMute()) {
                     Deque<NetworkReceive> deque = entry.getValue();
-                    NetworkReceive networkReceive = deque.poll();
+                    NetworkReceive networkReceive = deque.poll(); // 拿到队列中的一个响应
                     this.completedReceives.add(networkReceive);
                     this.sensors.recordBytesReceived(channel.id(), networkReceive.payload().limit());
                     if (deque.isEmpty())

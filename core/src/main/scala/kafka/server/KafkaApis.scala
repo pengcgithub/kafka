@@ -49,15 +49,16 @@ import org.apache.kafka.common.requests.SaslHandshakeResponse
 
 /**
  * Logic to handle the various Kafka requests
+ * 封装了处理各种请求的逻辑
  */
-class KafkaApis(val requestChannel: RequestChannel,
-                val replicaManager: ReplicaManager,
-                val coordinator: GroupCoordinator,
-                val controller: KafkaController,
+class KafkaApis(val requestChannel: RequestChannel, // 请求通道
+                val replicaManager: ReplicaManager, // 副本管理器
+                val coordinator: GroupCoordinator, // 消费者协调器组件
+                val controller: KafkaController, // 控制器组件
                 val zkUtils: ZkUtils,
-                val brokerId: Int,
-                val config: KafkaConfig,
-                val metadataCache: MetadataCache,
+                val brokerId: Int, // broker.id 参数值
+                val config: KafkaConfig, // kafka配置类
+                val metadataCache: MetadataCache, // 元数据缓存类
                 val metrics: Metrics,
                 val authorizer: Option[Authorizer]) extends Logging {
 
@@ -72,6 +73,7 @@ class KafkaApis(val requestChannel: RequestChannel,
     try {
       trace("Handling request:%s from connection %s;securityProtocol:%s,principal:%s".
         format(request.requestDesc(true), request.connectionId, request.securityProtocol, request.session.principal))
+      // 根据请求头部信息中的apikey字段判断属于哪类请求，然后调用响应的handler***方法
       ApiKeys.forId(request.requestId) match {
         case ApiKeys.PRODUCE => handleProducerRequest(request)
         case ApiKeys.FETCH => handleFetchRequest(request)
@@ -402,8 +404,9 @@ class KafkaApis(val requestChannel: RequestChannel,
       }
 
       // call the replica manager to append messages to the replicas
+      // 调用replicaManager将消息写入副本
       replicaManager.appendMessages(
-        produceRequest.timeout.toLong,
+        produceRequest.timeout.toLong, // 超时时间
         produceRequest.acks,
         internalTopicsAllowed,
         authorizedMessagesPerPartition,

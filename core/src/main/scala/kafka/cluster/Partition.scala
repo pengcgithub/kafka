@@ -427,9 +427,11 @@ class Partition(val topic: String,
     val (info, leaderHWIncremented) = inReadLock(leaderIsrUpdateLock) {
       val leaderReplicaOpt = leaderReplicaIfLocal()
       leaderReplicaOpt match {
+        // 判断一下当前这个partition在本地是否是leader
         case Some(leaderReplica) =>
           val log = leaderReplica.log.get
-          val minIsr = log.config.minInSyncReplicas
+          val minIsr = log.config.minInSyncReplicas // 这个是自己配置的，isr列表中至少得有一个replica
+          // 假设minIsr是2，那么此时isr中必须有一个leader和一个follower
           val inSyncSize = inSyncReplicas.size
 
           // Avoid writing to leader if there are not enough insync replicas to make it safe
@@ -438,6 +440,7 @@ class Partition(val topic: String,
               .format(topic, partitionId, inSyncSize, minIsr))
           }
 
+          // 获取到这个partition对应的log，基于这个log对象把数据写入进去
           val info = log.append(messages, assignOffsets = true)
           // probably unblock some follower fetch requests since log end offset has been updated
           replicaManager.tryCompleteDelayedFetch(new TopicPartitionOperationKey(this.topic, this.partitionId))

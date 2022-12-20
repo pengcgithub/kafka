@@ -249,7 +249,7 @@ public class NetworkClient implements KafkaClient {
     private void doSend(ClientRequest request, long now) {
         // 设置发送的时间
         request.setSendTimeMs(now);
-        // 标记正在发送中
+        // 标记正在发送中，暂存
         this.inFlightRequests.add(request);
         // 使用selector进行发送
         selector.send(request.request());
@@ -282,6 +282,7 @@ public class NetworkClient implements KafkaClient {
         handleCompletedSends(responses, updatedNow);
         // 3、处理响应，响应中有我们需要的元数据
         handleCompletedReceives(responses, updatedNow);
+        // 连接断开的处理
         handleDisconnections(responses, updatedNow);
         // 建立好连接后，把连接状态改为connected
         handleConnections();
@@ -449,7 +450,12 @@ public class NetworkClient implements KafkaClient {
         // if no response is expected then when the send is completed, return it
         for (Send send : this.selector.completedSends()) {
             ClientRequest request = this.inFlightRequests.lastSent(send.destination());
+            /**
+             * expectResponse应该是通过acks计算出来的，如果说 ack = 0 的话，
+             * 也就是不需要对一个请求接收响应，此时expectResponse应该就是false，这个时候直接就会把这个Request从inFlightRequests里面移出去
+             */
             if (!request.expectResponse()) {
+                // 不需要接收响应
                 this.inFlightRequests.completeLastSent(send.destination());
                 responses.add(new ClientResponse(request, now, false, null));
             }
@@ -458,6 +464,7 @@ public class NetworkClient implements KafkaClient {
 
     /**
      * Handle any completed receives and update the response list with the responses received.
+     * 此步骤仅仅对响应进行解析，暂时还没有涉及处理
      *
      * @param responses The list of responses to update
      * @param now The current time
@@ -465,6 +472,7 @@ public class NetworkClient implements KafkaClient {
     private void handleCompletedReceives(List<ClientResponse> responses, long now) {
         for (NetworkReceive receive : this.selector.completedReceives()) {
             String source = receive.source();
+            // 响应消息从inFlightRequests中移除
             ClientRequest req = inFlightRequests.completeNext(source);
             Struct body = parseResponse(receive.payload(), req.request().header());
             // 判断是否是元数据拉取的请求，如果是则更新metadata并返回true，否则返回false

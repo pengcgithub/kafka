@@ -95,6 +95,7 @@ public class KafkaChannel {
     }
 
     public boolean isMute() {
+        // 是否关注op_read事件
         return transportLayer.isMute();
     }
 
@@ -127,6 +128,7 @@ public class KafkaChannel {
         if (this.send != null)
             throw new IllegalStateException("Attempt to begin a send operation with prior send operation still in progress.");
         this.send = send;
+        // 让selector监听OP_WRITE事件
         this.transportLayer.addInterestOps(SelectionKey.OP_WRITE);
     }
 
@@ -137,8 +139,11 @@ public class KafkaChannel {
             receive = new NetworkReceive(maxReceiveSize, id);
         }
 
+        // 真正的数据read
         receive(receive);
+        // 数据读取完成的后置操作
         if (receive.complete()) {
+            // 让buffer复位
             receive.payload().rewind();
             result = receive;
             receive = null;
@@ -161,7 +166,9 @@ public class KafkaChannel {
 
     private boolean send(Send send) throws IOException {
         send.writeTo(transportLayer);
+        // 判断byteBuffer是否发送完毕（拆包的问题）
         if (send.completed())
+            // selector取消对OP_WRITE的监听
             transportLayer.removeInterestOps(SelectionKey.OP_WRITE);
 
         return send.completed();

@@ -207,12 +207,14 @@ public class Sender implements Runnable {
             }
         }
 
+        // 5、检查释放recordBatch过期的资源
         List<RecordBatch> expiredBatches = this.accumulator.abortExpiredBatches(this.requestTimeout, now);
         // update sensors
         for (RecordBatch expiredBatch : expiredBatches)
             this.sensors.recordErrors(expiredBatch.topicPartition.topic(), expiredBatch.recordCount);
 
         sensors.updateProduceRequestMetrics(batches);
+        // 6、将需要发送的batch构建clientRequest对象
         List<ClientRequest> requests = createProduceRequests(batches, now);
         // If we have any nodes that are ready to send + have sendable data, poll with 0 timeout so this can immediately
         // loop and try sending more data. Otherwise, the timeout is determined by nodes that have partitions with data
@@ -224,6 +226,7 @@ public class Sender implements Runnable {
             log.trace("Created {} produce requests: {}", requests.size(), requests);
             pollTimeout = 0;
         }
+        // 7、将ClientRequest暂存在KafkaChannel内部，并且将selector设置监听OP_WRITE事件
         for (ClientRequest request : requests)
             client.send(request, now);
 
@@ -258,6 +261,7 @@ public class Sender implements Runnable {
     private void handleProduceResponse(ClientResponse response, Map<TopicPartition, RecordBatch> batches, long now) {
         int correlationId = response.request().request().header().correlationId();
         if (response.wasDisconnected()) {
+            // 断开连接
             log.trace("Cancelled request {} due to node {} being disconnected", response, response.request()
                                                                                                   .request()
                                                                                                   .destination());
@@ -269,6 +273,7 @@ public class Sender implements Runnable {
                       correlationId);
             // if we have a response, parse it
             if (response.hasResponse()) {
+                // 有响应
                 ProduceResponse produceResponse = new ProduceResponse(response.responseBody());
                 for (Map.Entry<TopicPartition, ProduceResponse.PartitionResponse> entry : produceResponse.responses().entrySet()) {
                     TopicPartition tp = entry.getKey();
@@ -281,6 +286,7 @@ public class Sender implements Runnable {
                 this.sensors.recordThrottleTime(response.request().request().destination(),
                                                 produceResponse.getThrottleTime());
             } else {
+                // 没有响应
                 // this is the acks = 0 case, just complete all requests
                 for (RecordBatch batch : batches.values())
                     completeBatch(batch, Errors.NONE, -1L, Record.NO_TIMESTAMP, correlationId, now);
@@ -306,6 +312,7 @@ public class Sender implements Runnable {
                      batch.topicPartition,
                      this.retries - batch.attempts - 1,
                      error);
+            // 推测重试就是把recordBatch给放到accumulator的queue里去；
             this.accumulator.reenqueue(batch, now);
             this.sensors.recordRetries(batch.topicPartition.topic(), batch.recordCount);
         } else {
@@ -316,6 +323,7 @@ public class Sender implements Runnable {
                 exception = error.exception();
             // tell the user the result of their request
             batch.done(baseOffset, timestamp, exception);
+            // 将recordBatch的资源释放到内存缓冲区
             this.accumulator.deallocate(batch);
             if (error != Errors.NONE)
                 this.sensors.recordErrors(batch.topicPartition.topic(), batch.recordCount);
@@ -331,6 +339,8 @@ public class Sender implements Runnable {
      * We can retry a send if the error is transient and the number of attempts taken is fewer than the maximum allowed
      */
     private boolean canRetry(RecordBatch batch, Errors error) {
+        // retries 设置最多的重试次数，默认0
+        // 重试次数 < retries && 可以重试的异常
         return batch.attempts < this.retries && error.exception() instanceof RetriableException;
     }
 
@@ -351,10 +361,12 @@ public class Sender implements Runnable {
         Map<TopicPartition, ByteBuffer> produceRecordsByPartition = new HashMap<TopicPartition, ByteBuffer>(batches.size());
         final Map<TopicPartition, RecordBatch> recordsByPartition = new HashMap<TopicPartition, RecordBatch>(batches.size());
         for (RecordBatch batch : batches) {
+            // 感觉一个topic只对应一个batch
             TopicPartition tp = batch.topicPartition;
             produceRecordsByPartition.put(tp, batch.records.buffer());
             recordsByPartition.put(tp, batch);
         }
+        // 最后，二进制数组
         ProduceRequest request = new ProduceRequest(acks, timeout, produceRecordsByPartition);
         RequestSend send = new RequestSend(Integer.toString(destination),
                                            this.client.nextRequestHeader(ApiKeys.PRODUCE),

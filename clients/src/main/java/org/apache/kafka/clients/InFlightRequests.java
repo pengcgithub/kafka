@@ -91,6 +91,8 @@ final class InFlightRequests {
     public boolean canSendMore(String node) {
         Deque<ClientRequest> queue = requests.get(node);
         return queue == null || queue.isEmpty() ||
+                // nio拆包的判断
+                // 必须得先判断一下，这个Broker上一次发送的Request请求是否发送完毕了，那个request中的数据是否发送完了呢
                (queue.peekFirst().request().completed() && queue.size() < this.maxInFlightRequestsPerConnection);
     }
 
